@@ -1,4 +1,4 @@
-﻿using GTA;
+using GTA;
 using SharpDX.XInput;
 using System;
 

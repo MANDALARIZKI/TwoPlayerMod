@@ -1,4 +1,4 @@
-﻿using SharpDX.DirectInput;
+using SharpDX.DirectInput;
 using SharpDX.XInput;
 using System.Collections.Generic;
 

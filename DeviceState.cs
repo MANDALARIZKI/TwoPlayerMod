@@ -1,4 +1,4 @@
-﻿using GTA.Math;
+using GTA.Math;
 using System.Collections.Generic;
 
 namespace Benjamin94

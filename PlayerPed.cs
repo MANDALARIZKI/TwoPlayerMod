@@ -1,4 +1,4 @@
-﻿using Benjamin94.Input;
+using Benjamin94.Input;
 using GTA;
 using GTA.Math;
 using GTA.Native;

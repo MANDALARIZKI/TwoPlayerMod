@@ -1,4 +1,4 @@
-﻿namespace Benjamin94
+namespace Benjamin94
 {
     namespace Input
     {

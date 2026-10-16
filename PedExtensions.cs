@@ -1,4 +1,4 @@
-﻿using GTA;
+using GTA;
 
 namespace Benjamin94
 {
