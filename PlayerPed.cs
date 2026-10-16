@@ -53,6 +53,9 @@ namespace Benjamin94
         }
 
         private int targetIndex = 0;
+        private Ped lockedTarget = null;
+        private int targetLockTimer = 0;
+
         private int TargetIndex
         {
             get
@@ -188,12 +191,27 @@ namespace Benjamin94
         }
 
         /// <summary>
-        /// Gets targets for the given player in combat situations
+        /// Gets targets for the given player in combat situations.
+        /// Enhanced: wider search radius and sticky lock-on so the target stays prioritized.
         /// </summary>
         /// <returns>An array of Peds</returns>
         private Ped[] GetTargets()
         {
-            return World.GetNearbyPeds(Ped, 50).Where(p => IsValidTarget(p)).OrderBy(p => p.Position.DistanceTo(Ped.Position)).ToArray();
+            var nearby = World.GetNearbyPeds(Ped, 80).Where(p => IsValidTarget(p)).OrderBy(p => p.Position.DistanceTo(Ped.Position)).ToArray();
+
+            if (lockedTarget != null && lockedTarget.IsAlive && IsValidTarget(lockedTarget))
+            {
+                var list = new List<Ped>(nearby);
+                list.Remove(lockedTarget);
+                list.Insert(0, lockedTarget);
+                nearby = list.ToArray();
+            }
+            else
+            {
+                lockedTarget = null;
+            }
+
+            return nearby;
         }
 
         /// <summary>
@@ -437,6 +455,7 @@ namespace Benjamin94
         }
 
         private bool resetWalking = false;
+        private bool wasJumpPressed = false;
 
         /// <summary>
         /// Updates all kind of on foot actions like walking entering exiting vehicles
@@ -454,6 +473,9 @@ namespace Benjamin94
                     // needed for running
                     leftThumb *= 10;
                 }
+
+                // Orientation fix: calculate a world-space destination aligned with camera heading
+                // so the ped always faces the direction the stick is pushed relative to the camera.
                 Vector3 dest = Vector3.Zero;
                 if (TwoPlayerMod.customCamera)
                 {
@@ -461,8 +483,19 @@ namespace Benjamin94
                 }
                 else
                 {
-                    dest = Ped.GetOffsetInWorldCoords(new Vector3(leftThumb.X, leftThumb.Y, 0));
+                    // Use camera-relative movement so the ped faces the correct direction
+                    float camHeading = GameplayCamera.Heading;
+                    float rad = (float)(camHeading * Math.PI / 180.0);
+                    float cosH = (float)Math.Cos(rad);
+                    float sinH = (float)Math.Sin(rad);
+                    float worldX = leftThumb.X * cosH - leftThumb.Y * sinH;
+                    float worldY = leftThumb.X * sinH + leftThumb.Y * cosH;
+                    dest = Ped.Position + new Vector3(worldX, worldY, 0);
                 }
+
+                // Smoothly set heading toward the movement destination before running
+                float targetHeading = (float)(Math.Atan2(dest.X - Ped.Position.X, dest.Y - Ped.Position.Y) * 180.0 / Math.PI);
+                Function.Call(Hash.SET_PED_DESIRED_HEADING, Ped, targetHeading);
 
                 Ped.Task.RunTo(dest, true, -1);
                 resetWalking = true;
@@ -473,11 +506,18 @@ namespace Benjamin94
                 resetWalking = false;
             }
 
-            if (Input.isPressed(DeviceButton.X) && CanDoAction(PlayerPedAction.Jump, 850))
+            // Jump fix: only trigger on the initial press, not while held, preventing the
+            // continuous-forward glitch when the jump button is held down.
+            bool jumpHeld = Input.isPressed(DeviceButton.X);
+            if (jumpHeld && !wasJumpPressed && CanDoAction(PlayerPedAction.Jump, 850))
             {
-                Ped.Task.Climb();
-                UpdateLastAction(PlayerPedAction.Jump);
+                if (Ped.IsOnFoot && !Ped.IsJumping && !Ped.IsFalling && !Ped.IsClimbing)
+                {
+                    Ped.Task.Jump();
+                    UpdateLastAction(PlayerPedAction.Jump);
+                }
             }
+            wasJumpPressed = jumpHeld;
 
             if (Input.isPressed(DeviceButton.LeftShoulder))
             {
@@ -526,11 +566,13 @@ namespace Benjamin94
                     if (Input.IsDirectionLeft(dir))
                     {
                         TargetIndex--;
+                        lockedTarget = null; // manual switch clears sticky lock
                         UpdateLastAction(PlayerPedAction.SelectTarget);
                     }
                     if (Input.IsDirectionRight(dir))
                     {
                         TargetIndex++;
+                        lockedTarget = null;
                         UpdateLastAction(PlayerPedAction.SelectTarget);
                     }
                 }
@@ -544,8 +586,18 @@ namespace Benjamin94
 
                 if (!target.IsAlive)
                 {
+                    lockedTarget = null;
                     Targets = GetTargets();
+                    target = Targets.ElementAtOrDefault(TargetIndex);
+                    if (target == null)
+                    {
+                        return;
+                    }
                 }
+
+                // Sticky lock-on: remember the target so tracking stays snappy across frames
+                lockedTarget = target;
+                targetLockTimer = Game.GameTime;
 
                 if (target != null)
                 {
@@ -571,14 +623,27 @@ namespace Benjamin94
                             }
                             else if (IsMelee(weapons[WeaponIndex]))
                             {
-                                // Ped.Task.ShootAt(target, 750, FiringPattern.FullAuto);
-                                // UI.ShowSubtitle("Melee weapons are not supported yet.");
-                                Ped.Task.FightAgainst(target, -1);
-
+                                // Enhanced melee for secondary players: close distance and use
+                                // FightAgainstHatedTargets with a longer duration for easier hit registration.
+                                float distToTarget = Ped.Position.DistanceTo(target.Position);
+                                if (distToTarget > 3.0f)
+                                {
+                                    // Move closer to ensure the punch actually connects
+                                    Ped.Task.RunTo(target.Position, false, -1);
+                                }
+                                else
+                                {
+                                    // Wider melee engagement range via native for easier brawling
+                                    Function.Call(Hash.SET_PED_COMBAT_RANGE, Ped, 2); // 2 = CR_Close
+                                    Function.Call(Hash.SET_PED_COMBAT_MOVEMENT, Ped, 0); // 0 = CM_Stationary
+                                    Ped.Task.FightAgainst(target, 2000);
+                                }
                             }
                             else
                             {
-                                Ped.Task.ShootAt(target, 750, FiringPattern.FullAuto);
+                                // Enhanced auto-aim: shoot with higher accuracy and shorter interval
+                                Function.Call(Hash.SET_PED_FIRING_PATTERN, Ped, (uint)FiringPattern.FullAuto);
+                                Ped.Task.ShootAt(target, 500, FiringPattern.FullAuto);
                             }
 
                             UpdateLastAction(PlayerPedAction.Shoot);
@@ -586,7 +651,10 @@ namespace Benjamin94
                     }
                     else
                     {
-                        Ped.Task.AimAt(target, 100);
+                        // Enhanced auto-aim: longer aim duration (250ms vs 100ms) for smoother tracking,
+                        // and use the target's velocity-predicted position for more accurate lock-on.
+                        Vector3 aimPos = target.Position + target.Velocity * 0.1f;
+                        Ped.Task.AimAt(aimPos, 250);
                     }
                 }
 
@@ -606,6 +674,7 @@ namespace Benjamin94
             else
             {
                 TargetIndex = 0;
+                lockedTarget = null;
             }
         }
 

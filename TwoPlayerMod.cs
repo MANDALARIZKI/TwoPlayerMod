@@ -470,6 +470,7 @@ class TwoPlayerMod : Script
     }
 
     private bool resetWalking = false;
+    private bool wasP1JumpPressed = false;
 
     private void TwoPlayerMod_Tick(object sender, EventArgs e)
     {
@@ -501,10 +502,17 @@ class TwoPlayerMod : Script
 
             if (customCamera && player1.IsOnFoot)
             {
-                if (Game.IsControlPressed(0, GTA.Control.Jump))
+                // Jump fix: only trigger on the initial press, not while held.
+                // This prevents the continuous-forward glitch when the jump button is held down.
+                bool p1JumpHeld = Game.IsControlPressed(0, GTA.Control.Jump);
+                if (p1JumpHeld && !wasP1JumpPressed)
                 {
-                    player1.Task.Climb();
+                    if (!player1.IsJumping && !player1.IsFalling && !player1.IsClimbing)
+                    {
+                        player1.Task.Jump();
+                    }
                 }
+                wasP1JumpPressed = p1JumpHeld;
 
                 Vector2 offset = Vector2.Zero;
 
@@ -535,8 +543,21 @@ class TwoPlayerMod : Script
                         // needed for running
                         offset *= 10;
                     }
-                    Vector3 dest = Vector3.Zero;
-                    dest = player1.Position - new Vector3(offset.X, offset.Y, 0);
+
+                    // Orientation fix: use camera-relative movement so Player 1 faces the
+                    // correct direction instead of spinning or facing the wrong way.
+                    float camHeading = GameplayCamera.Heading;
+                    float rad = (float)(camHeading * Math.PI / 180.0);
+                    float cosH = (float)Math.Cos(rad);
+                    float sinH = (float)Math.Sin(rad);
+                    float worldX = offset.X * cosH - offset.Y * sinH;
+                    float worldY = offset.X * sinH + offset.Y * cosH;
+                    Vector3 dest = player1.Position + new Vector3(worldX, worldY, 0);
+
+                    // Smoothly set heading toward the movement destination
+                    float targetHeading = (float)(Math.Atan2(dest.X - player1.Position.X, dest.Y - player1.Position.Y) * 180.0 / Math.PI);
+                    Function.Call(Hash.SET_PED_DESIRED_HEADING, player1, targetHeading);
+
                     player1.Task.RunTo(dest, true, -1);
                     resetWalking = true;
                 }
@@ -545,6 +566,10 @@ class TwoPlayerMod : Script
                     player1.Task.ClearAll();
                     resetWalking = false;
                 }
+            }
+            else
+            {
+                wasP1JumpPressed = false;
             }
 
             if (Game.IsControlJustReleased(0, GTA.Control.NextCamera))
